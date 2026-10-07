@@ -2,8 +2,10 @@
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
+from PySide6.QtCore import QObject, QProcess, QRunnable, QThreadPool, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -19,13 +21,34 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app import downloader, settings
+from app import downloader, settings, updater
 from app.download_queue import DownloadQueue
 from app.item_widget import ItemWidget
 from app.links import find_links
 
 # Эти строки «Скачать всё» берёт в работу; ошибки — только через «Повторить»
 _STARTABLE = ("queued", downloader.STOPPED)
+
+
+class _UpdateSignals(QObject):
+    done = Signal(str, bool, str)  # версия на сервере, скачано ли, текст ошибки
+
+
+class _UpdateTask(QRunnable):
+    """Проверка и скачивание обновления в фоне."""
+
+    def __init__(self, signals: _UpdateSignals) -> None:
+        super().__init__()
+        self.signals = signals
+
+    def run(self) -> None:
+        try:
+            version, installed = updater.update()
+            self.signals.done.emit(version, installed, "")
+        except updater.UpdateError as e:
+            self.signals.done.emit("", False, str(e))
+        except Exception as e:  # noqa: BLE001
+            self.signals.done.emit("", False, f"Неожиданная ошибка: {e}")
 
 
 class MainWindow(QMainWindow):
@@ -99,6 +122,53 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         self._update_empty_hint()
+        self._build_menu()
+
+    # --- меню и обновление загрузчика ---
+
+    def _build_menu(self) -> None:
+        menu = self.menuBar().addMenu("Загрузчик")
+        self.update_action = menu.addAction("Обновить загрузчик")
+        self.update_action.triggered.connect(self.update_loader)
+        self.version_action = menu.addAction(f"Версия yt-dlp: {updater.running_version()}")
+        self.version_action.setEnabled(False)
+        self._update_signals = _UpdateSignals()
+        self._update_signals.done.connect(self._on_update_done)
+
+    def update_loader(self) -> None:
+        self.update_action.setEnabled(False)
+        self.statusBar().showMessage("Проверяю обновления загрузчика…")
+        QThreadPool.globalInstance().start(_UpdateTask(self._update_signals))
+
+    def _on_update_done(self, version: str, installed: bool, error: str) -> None:
+        self.update_action.setEnabled(True)
+        self.statusBar().clearMessage()
+        if error:
+            QMessageBox.warning(self, "Обновление загрузчика", error)
+            return
+        if not installed:
+            pending = updater.parse_version(version) > updater.parse_version(updater.running_version())
+            QMessageBox.information(
+                self, "Обновление загрузчика",
+                f"Обновлений нет. Последняя версия {version} уже установлена"
+                + (" (заработает после перезапуска)." if pending else "."),
+            )
+            return
+        answer = QMessageBox.question(
+            self, "Обновление загрузчика",
+            f"Загрузчик обновлён до версии {version}.\n"
+            "Новая версия заработает после перезапуска приложения.\n\n"
+            "Перезапустить сейчас? Текущие загрузки будут остановлены.",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._restart()
+
+    def _restart(self) -> None:
+        if getattr(sys, "frozen", False):
+            QProcess.startDetached(sys.executable, sys.argv[1:])
+        else:
+            QProcess.startDetached(sys.executable, [os.path.abspath(sys.argv[0])] + sys.argv[1:])
+        self.close()
 
     # --- ссылки ---
 

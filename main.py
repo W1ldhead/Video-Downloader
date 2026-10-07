@@ -2,9 +2,14 @@
 
 import sys
 
-from PySide6.QtWidgets import QApplication
+from app import updater
 
-from app.window import MainWindow
+# Свежий yt-dlp из папки обновлений — до того, как его кто-то импортирует
+updater.activate()
+
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+from app.window import MainWindow  # noqa: E402
 
 
 def main() -> int:
