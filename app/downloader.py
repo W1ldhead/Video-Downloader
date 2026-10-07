@@ -8,6 +8,8 @@ from typing import Callable
 import yt_dlp
 from yt_dlp.utils import DownloadError
 
+from app import cookies
+
 # Статусы для интерфейса
 FETCHING = "fetching"        # получение данных
 DOWNLOADING = "downloading"  # скачивается
@@ -50,11 +52,16 @@ _BASE_OPTIONS = {
     "noprogress": True,
     "logger": _SilentLogger(),
     "fixup": "never",  # ffmpeg не нужен: у TikTok видео и звук в одном файле
+    "color": {"stdout": "never", "stderr": "never"},  # без кодов цвета в тексте ошибок
 }
 
 
 def _ydl(extra: dict | None = None) -> yt_dlp.YoutubeDL:
-    return yt_dlp.YoutubeDL({**_BASE_OPTIONS, **(extra or {})})
+    ydl = yt_dlp.YoutubeDL({**_BASE_OPTIONS, **(extra or {})})
+    # Cookies грузим вручную, а не через "cookiefile": тогда yt-dlp не перезаписывает файл
+    if cookies.is_set():
+        ydl.cookiejar.load(str(cookies.stored_path()))
+    return ydl
 
 
 def pick_format(formats: list[dict]) -> dict | None:
@@ -93,7 +100,13 @@ def file_path(folder: Path, author: str, video_id: str) -> Path:
 
 def explain(error: Exception) -> str:
     """Короткая понятная причина ошибки."""
-    text = str(error)
+    # yt-dlp раскрашивает текст для терминала — убираем коды цвета
+    text = re.sub(r"\x1b\[[0-9;]*m", "", str(error))
+    if "log in for access" in text.lower():
+        if cookies.is_set():
+            return ("Видео 18+: TikTok не принял вход. Файл cookies устарел или в аккаунте "
+                    "не подтверждён возраст — сохраните файл заново")
+        return "Видео 18+: нужен вход в аккаунт. Укажите файл cookies в меню «Загрузчик»"
     rules = [
         ("IP address is blocked", "Видео недоступно в вашем регионе"),
         ("private", "Видео закрыто автором"),

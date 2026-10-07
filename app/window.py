@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app import downloader, settings, updater
+from app import cookies, downloader, settings, updater
 from app.download_queue import DownloadQueue
 from app.item_widget import ItemWidget
 from app.links import find_links
@@ -132,6 +132,16 @@ class MainWindow(QMainWindow):
         self.update_action.triggered.connect(self.update_loader)
         self.version_action = menu.addAction(f"Версия yt-dlp: {updater.running_version()}")
         self.version_action.setEnabled(False)
+
+        menu.addSeparator()
+        choose_cookies = menu.addAction("Указать файл cookies (для видео 18+)…")
+        choose_cookies.triggered.connect(self.choose_cookies)
+        self.remove_cookies_action = menu.addAction("Удалить cookies")
+        self.remove_cookies_action.triggered.connect(self.remove_cookies)
+        self.cookies_state_action = menu.addAction("")
+        self.cookies_state_action.setEnabled(False)
+        self._refresh_cookies_menu()
+
         self._update_signals = _UpdateSignals()
         self._update_signals.done.connect(self._on_update_done)
 
@@ -162,6 +172,41 @@ class MainWindow(QMainWindow):
         )
         if answer == QMessageBox.StandardButton.Yes:
             self._restart()
+
+    # --- cookies ---
+
+    def _refresh_cookies_menu(self) -> None:
+        on = cookies.is_set()
+        self.cookies_state_action.setText("Cookies: указаны" if on else "Cookies: не указаны")
+        self.remove_cookies_action.setEnabled(on)
+
+    def choose_cookies(self) -> None:
+        start = str(Path.home() / "Downloads")
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Файл cookies.txt с входом в TikTok", start, "Файлы cookies (*.txt);;Все файлы (*)"
+        )
+        if not chosen:
+            return
+        try:
+            warning = cookies.install(Path(chosen))
+        except cookies.CookieError as e:
+            QMessageBox.warning(self, "Файл cookies", str(e))
+            return
+        self._refresh_cookies_menu()
+        text = (
+            "Файл принят, программа сохранила его копию у себя.\n\n"
+            "Исходный файл лучше удалить из папки — в нём ваш вход в TikTok, "
+            "как пароль.\n\n"
+            "Видео с ошибкой «Видео 18+» теперь можно скачать кнопкой «Повторить»."
+        )
+        if warning:
+            text = warning + "\n\n" + text
+        QMessageBox.information(self, "Файл cookies", text)
+
+    def remove_cookies(self) -> None:
+        cookies.remove()
+        self._refresh_cookies_menu()
+        self.statusBar().showMessage("Cookies удалены.", 5000)
 
     def _restart(self) -> None:
         if getattr(sys, "frozen", False):

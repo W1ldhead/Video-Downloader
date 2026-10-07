@@ -46,6 +46,17 @@ class ExplainTest(unittest.TestCase):
         e = Exception("ERROR: [TikTok] 1: Your IP address is blocked from accessing this post")
         self.assertEqual(explain(e), "Видео недоступно в вашем регионе")
 
+    def test_colored_age_restricted(self):
+        e = Exception(
+            "\x1b[0;31mERROR:\x1b[0m [TikTok] 7633872015992065287: This post may not be comfortable "
+            "for some audiences. Log in for access. Use --cookies-from-browser or --cookies"
+        )
+        self.assertIn("Видео 18+", explain(e))
+
+    def test_colored_unknown(self):
+        e = Exception("\x1b[0;31mERROR:\x1b[0m [TikTok] 1: Strange thing")
+        self.assertEqual(explain(e), "Strange thing")
+
     def test_unknown_is_short(self):
         e = Exception("ERROR: [TikTok] 123: Something odd happened\nTraceback ...")
         self.assertEqual(explain(e), "Something odd happened")
