@@ -1,4 +1,5 @@
-﻿yt-dlp==2026.8.19
+﻿yt-dlp[curl-cffi]==2026.8.19
+curl_cffi==0.16.3
 PySide6==6.11.2
 pyinstaller==6.22.3
 

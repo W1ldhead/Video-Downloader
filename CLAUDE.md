@@ -30,4 +30,7 @@
 
 ## Текущий прогресс
 - Шаг 0 готов: папка, ТЗ в `docs/`, git, Python 3.13.12, `.venv` с yt-dlp, PySide6, PyInstaller.
-- Шаг 1: `app/links.py` — find_links(text): полные /@автор/video/ID, m.tiktok.com/v/ID.html, vm./vt. и /t/ короткие; хвостовые знаки и параметры отрезаются; дубли по id видео (короткие — по коду). Профили, музыка, чужие домены — пропускаются. Проверки: `.venv\Scripts\python.exe -m unittest -v` (9 OK). Ждём подтверждения.
+- Шаг 1: `app/links.py` — find_links(text): полные /@автор/video/ID, m.tiktok.com/v/ID.html, vm./vt. и /t/ короткие; хвостовые знаки и параметры отрезаются; дубли по id видео (короткие — по коду). Профили, музыка, чужие домены — пропускаются. Проверки: `.venv\Scripts\python.exe -m unittest -v`. Подтверждён.
+- Шаг 2: `app/downloader.py` — download(url, folder, on_info, on_progress, should_stop) → Result(status, path, message); статусы fetching/downloading/done/already/error/stopped. Формат: без «watermarked»/«UNPLAYABLE», с видео и звуком, предпочтение h264, потом высота и битрейт. Имя `автор_id.mp4` (автор = uploader, запрещённые знаки → _). Остановка — исключение из progress hook, недокачанное (.part) удаляется. explain() — короткие причины на русском. Ручная проверка: `tools/try_download.py <ссылка> [папка]`. 18 проверок OK.
+- **Важно:** без curl_cffi TikTok отдаёт yt-dlp страницу-проверку («Unexpected response from webpage request») — ставить `yt-dlp[curl-cffi]`, при сборке .exe не потерять curl_cffi.
+- Тестовое видео: `https://www.tiktok.com/@hankgreen1/video/7047596209028074758` (скачивается); `@leenabhushan/video/6748451240264420610` — «IP заблокирован» (проверка ошибки региона).
