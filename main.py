@@ -13,6 +13,13 @@ from app.window import MainWindow  # noqa: E402
 
 
 def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
+        from pathlib import Path
+
+        from app import selftest
+
+        return selftest.run(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else None)
+
     app = QApplication(sys.argv)
     app.setApplicationName("TikTok Downloader")
     window = MainWindow()

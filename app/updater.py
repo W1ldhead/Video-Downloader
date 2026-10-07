@@ -12,6 +12,7 @@ import re
 import sys
 import urllib.request
 from importlib import metadata
+from importlib.machinery import PathFinder
 from pathlib import Path
 
 PYPI_URL = "https://pypi.org/pypi/yt-dlp/json"
@@ -54,13 +55,30 @@ def downloaded_wheel() -> tuple[str, Path] | None:
     return best
 
 
+class _WheelFinder:
+    """Ищет yt_dlp в скачанном .whl раньше всех остальных.
+
+    Просто добавить .whl в sys.path мало: в собранном .exe встроенные модули
+    находятся раньше, чем пути из sys.path.
+    """
+
+    def __init__(self, wheel: Path) -> None:
+        self.wheel = str(wheel)
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.partition(".")[0] != "yt_dlp":
+            return None
+        # Для вложенных модулей path — папка пакета внутри .whl
+        return PathFinder.find_spec(fullname, path if path is not None else [self.wheel])
+
+
 def activate() -> None:
     """Вызывать до первого import yt_dlp."""
     if "yt_dlp" in sys.modules:
         return
     found = downloaded_wheel()
     if found and parse_version(found[0]) > parse_version(bundled_version()):
-        sys.path.insert(0, str(found[1]))
+        sys.meta_path.insert(0, _WheelFinder(found[1]))
 
 
 def running_version() -> str:
