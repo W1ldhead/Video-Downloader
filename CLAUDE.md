@@ -30,4 +30,4 @@
 
 ## Текущий прогресс
 - Шаг 0 готов: папка, ТЗ в `docs/`, git, Python 3.13.12, `.venv` с yt-dlp, PySide6, PyInstaller.
-- Сейчас: шаг 1.
+- Шаг 1: `app/links.py` — find_links(text): полные /@автор/video/ID, m.tiktok.com/v/ID.html, vm./vt. и /t/ короткие; хвостовые знаки и параметры отрезаются; дубли по id видео (короткие — по коду). Профили, музыка, чужие домены — пропускаются. Проверки: `.venv\Scripts\python.exe -m unittest -v` (9 OK). Ждём подтверждения.
