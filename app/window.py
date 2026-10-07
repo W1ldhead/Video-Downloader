@@ -1,5 +1,7 @@
 """Главное окно приложения."""
 
+import os
+import subprocess
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -17,9 +19,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app import settings
+from app import downloader, settings
+from app.download_queue import DownloadQueue
 from app.item_widget import ItemWidget
 from app.links import find_links
+
+# Эти строки «Скачать всё» берёт в работу; ошибки — только через «Повторить»
+_STARTABLE = ("queued", downloader.STOPPED)
 
 
 class MainWindow(QMainWindow):
@@ -57,9 +63,21 @@ class MainWindow(QMainWindow):
 
         # Кнопки управления
         self.download_all = QPushButton("Скачать всё")
+        self.download_all.clicked.connect(self.start_all)
         self.stop_button = QPushButton("Остановить")
+        self.stop_button.clicked.connect(self.stop_all)
         self.clear_button = QPushButton("Очистить список")
         self.clear_button.clicked.connect(self.clear_list)
+
+        # Очередь загрузок
+        self.queue = DownloadQueue()
+        self.queue.info.connect(lambda w, author: w.set_author(author))
+        self.queue.thumbnail.connect(lambda w, data: w.set_thumbnail(data))
+        self.queue.status.connect(
+            lambda w, status, message, path: w.set_status(status, message, Path(path) if path else None)
+        )
+        self.queue.progress.connect(lambda w, done, total: w.set_progress(done, total or None))
+        self.queue.idle.connect(self._on_idle)
         controls = QHBoxLayout()
         controls.addWidget(self.download_all)
         controls.addWidget(self.stop_button)
@@ -116,14 +134,58 @@ class MainWindow(QMainWindow):
         item.setSizeHint(widget.sizeHint())
         self.list.addItem(item)
         self.list.setItemWidget(item, widget)
+        widget.retry_clicked.connect(lambda w=widget: self._enqueue(w))
+        widget.open_folder_clicked.connect(lambda w=widget: self._open_folder(w))
         return widget
 
     def clear_list(self) -> None:
+        for widget in self.items():
+            self.queue.forget(widget)
         self.list.clear()
         self._update_empty_hint()
 
+    # --- загрузки ---
+
+    def start_all(self) -> None:
+        todo = [w for w in self.items() if w.status in _STARTABLE and not self.queue.is_busy(w)]
+        if not todo:
+            self.statusBar().showMessage("Нечего скачивать: добавьте ссылки.", 5000)
+            return
+        for widget in todo:
+            self._enqueue(widget)
+        self.statusBar().showMessage(f"В очереди: {len(todo)}.", 5000)
+
+    def _enqueue(self, widget: ItemWidget) -> None:
+        widget.set_status("queued")
+        self.queue.add(widget, widget.url, self.folder)
+
+    def stop_all(self) -> None:
+        for widget in self.queue.stop_all():
+            widget.set_status("queued")
+        self.statusBar().showMessage("Загрузки остановлены.", 5000)
+
+    def _on_idle(self) -> None:
+        done = sum(w.status in (downloader.DONE, downloader.ALREADY) for w in self.items())
+        errors = sum(w.status == downloader.ERROR for w in self.items())
+        text = f"Готово: {done}."
+        if errors:
+            text += f" С ошибкой: {errors}."
+        self.statusBar().showMessage(text)
+
+    def _open_folder(self, widget: ItemWidget) -> None:
+        # Открывает Проводник и выделяет файл
+        if widget.path and widget.path.exists():
+            subprocess.Popen(["explorer", "/select,", str(widget.path)])
+        else:
+            folder = widget.path.parent if widget.path else self.folder
+            os.startfile(folder)  # noqa: S606
+
     def _update_empty_hint(self) -> None:
         self.empty_hint.setVisible(self.list.count() == 0)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — имя задаёт Qt
+        self.queue.shutdown()
+        super().closeEvent(event)
 
     # --- папка ---
 
