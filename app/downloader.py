@@ -2,6 +2,7 @@
 
 import copy
 import re
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -84,17 +85,21 @@ def _platform(url: str) -> str | None:
 
 def pick_format(formats: list[dict], platform: str | None = TIKTOK) -> dict | None:
     """Лучший готовый файл с картинкой и звуком (у TikTok — без водяного знака) или None."""
-    good = []
-    for f in formats:
+    def allowed(f: dict) -> bool:
         note = (f.get("format_note") or "").lower()
         if "unplayable" in note:
-            continue
-        if platform == TIKTOK and "watermark" in note:
-            continue
-        # «none» — точно нет; None — yt-dlp не знает (у X так подписаны обычные mp4)
-        if f.get("vcodec") == "none" or f.get("acodec") == "none":
-            continue
-        good.append(f)
+            return False
+        return not (platform == TIKTOK and "watermark" in note)
+
+    # «none» — точно нет; None — yt-dlp не знает (у X так подписаны обычные mp4)
+    good = [f for f in formats if allowed(f) and f.get("vcodec") != "none" and f.get("acodec") != "none"]
+    has_audio = any(
+        f.get("acodec") not in (None, "none") or f.get("vcodec") == "none"  # поток «только звук»
+        for f in formats
+    )
+    if not good and not has_audio:
+        # Звука нет ни в одном формате — ролик немой, склеивать не с чем
+        good = [f for f in formats if allowed(f) and f.get("vcodec") != "none"]
     if not good:
         return None
     return max(
@@ -296,15 +301,87 @@ def fetch_info(url: str) -> tuple[VideoInfo, dict]:
         info = _resolve(ydl, ydl.extract_info(url, download=False, process=False))
     if info.get("entries") is not None:
         info["entries"] = [e for e in info["entries"] if e]  # бывает «ленивым» списком
+    return summarize(url, info), info
+
+
+def summarize(url: str, info: dict) -> VideoInfo:
+    """Кратко о видео для интерфейса — из «сырого» ответа fetch_info."""
+    platform = _platform(url)
     entries = _entries(info)
     first = entries[0] if entries else info
-    video = VideoInfo(
+    return VideoInfo(
         id=_post_id(url, info, platform),
         author=_author(info, platform),
         thumbnail=_thumbnail(info) or _thumbnail(first),
         count=len(entries),
     )
-    return video, info
+
+
+def _format_size(fmt: dict, duration: float | None, ask_server: bool) -> tuple[int | None, bool]:
+    """Размер одного формата: (байты или None, точный ли)."""
+    if fmt.get("filesize"):
+        return int(fmt["filesize"]), True
+    if fmt.get("filesize_approx"):
+        return int(fmt["filesize_approx"]), False
+    if ask_server and fmt.get("url") and "m3u8" not in (fmt.get("protocol") or ""):
+        size = _content_length(fmt["url"], fmt.get("http_headers") or {})
+        if size:
+            return size, True
+    if fmt.get("tbr") and duration:
+        # Битрейт (кбит/с) × длительность. Грубо: у X битрейт в описании — «потолок», файл меньше
+        return int(fmt["tbr"] * 1000 / 8 * duration), False
+    return None, False
+
+
+def _content_length(url: str, headers: dict) -> int | None:
+    """Размер файла по ответу сервера на короткий запрос, без скачивания."""
+    try:
+        request = urllib.request.Request(url, method="HEAD", headers=headers)
+        with urllib.request.urlopen(request, timeout=config.SIZE_REQUEST_TIMEOUT) as r:
+            length = r.headers.get("Content-Length")
+            return int(length) if length and int(length) > 0 else None
+    except Exception:  # noqa: BLE001 — без размера тоже можно скачать
+        return None
+
+
+def estimate_size(url: str, info: dict, quality: int, ask_server: bool = False) -> tuple[int | None, bool]:
+    """Ожидаемый размер всех видео по ссылке: (байты или None, точный ли).
+
+    Формат выбирается так же, как при скачивании. ask_server — можно ли спросить
+    размер у сервера (сетевой запрос; у Instagram других данных нет).
+    """
+    platform = _platform(url)
+    total, exact = 0, True
+    for entry in _entries(info):
+        size, is_exact = _entry_size(entry, info, platform, quality, ask_server)
+        if size is None:
+            return None, False
+        total += size
+        exact = exact and is_exact
+    return (total, exact) if total else (None, False)
+
+
+def _entry_size(entry: dict, info: dict, platform: str | None, quality: int,
+                ask_server: bool) -> tuple[int | None, bool]:
+    """Размер одного видео поста (картинка + звук, если их качают отдельно)."""
+    formats = entry.get("formats") or []
+    if platform == YOUTUBE:
+        picked = youtube_pick(formats, quality)
+        by_id = {f.get("format_id"): f for f in formats}
+        chosen = [by_id[p] for p in picked if p and p in by_id] if picked else []
+    else:
+        fmt = pick_format(formats, platform)
+        chosen = [fmt] if fmt else []
+    if not chosen:
+        return None, False
+    total, exact = 0, True
+    for fmt in chosen:
+        size, is_exact = _format_size(fmt, entry.get("duration") or info.get("duration"), ask_server)
+        if size is None:
+            return None, False
+        total += size
+        exact = exact and is_exact
+    return total, exact
 
 
 def _format_selector(platform: str | None, quality: int):
@@ -339,12 +416,20 @@ def download(
     should_stop: Callable[[], bool] = lambda: False,
     on_part: Callable[[int, int], None] = lambda number, count: None,
     quality: int = config.YOUTUBE_DEFAULT_QUALITY,
+    prefetched: dict | None = None,
 ) -> Result:
-    """Скачивает все видео по ссылке. Исключений наружу не бросает — всё в Result."""
+    """Скачивает все видео по ссылке. Исключений наружу не бросает — всё в Result.
+
+    prefetched — данные, полученные заранее (fetch_info); если их нет — получаем сейчас.
+    """
     target: Path | None = None
     platform = _platform(url)
     try:
-        video, info = fetch_info(url)
+        if prefetched is not None:
+            info = prefetched
+            video = summarize(url, info)
+        else:
+            video, info = fetch_info(url)
         on_info(video)
         if should_stop():
             return Result(STOPPED)
@@ -361,18 +446,31 @@ def download(
             return Result(ALREADY, targets[0])
         folder.mkdir(parents=True, exist_ok=True)
 
+        # Картинка и звук YouTube качаются по очереди — считаем общий прогресс по обоим.
+        # Общий размер видео — из нашей же оценки (без сети), иначе — по ходу скачивания
+        state = {"finished": 0, "expected": None}
+
         def hook(d: dict) -> None:
             if should_stop():
                 raise _Stopped()
-            if d.get("status") == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate")
-                on_progress(int(d.get("downloaded_bytes") or 0), int(total) if total else None)
+            this_total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            if d.get("status") == "finished":
+                state["finished"] += int(this_total or d.get("downloaded_bytes") or 0)
+            elif d.get("status") == "downloading":
+                done = state["finished"] + int(d.get("downloaded_bytes") or 0)
+                total = state["expected"] or (state["finished"] + this_total if this_total else None)
+                if total:
+                    total = max(total, done)  # оценка бывает чуть меньше настоящего
+                on_progress(done, int(total) if total else None)
 
         selector = _format_selector(platform, quality)
         for number, (entry, target) in enumerate(zip(entries, targets), start=1):
             if target.exists():
                 continue  # скачан в прошлый раз
             on_part(number, len(entries))
+            # У каждого видео поста — свой счёт
+            state["finished"] = 0
+            state["expected"] = _entry_size(entry, info, platform, quality, ask_server=False)[0]
             if platform == TIKTOK and entry.get("formats") and pick_format(entry["formats"], platform) is None:
                 return Result(ERROR, message="Нет версии без водяного знака")
             options = {

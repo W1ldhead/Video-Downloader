@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QRunnable, QThreadPool, Signal
@@ -22,13 +23,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app import config, cookies, downloader, settings, updater
+from app import config, cookies, downloader, settings, sizes, updater
 from app.download_queue import DownloadQueue
-from app.item_widget import ItemWidget
-from app.links import PLATFORMS, find_links, platform_of
+from app.item_widget import PROBING, READY, ItemWidget
+from app.links import PLATFORMS, YOUTUBE, find_links, platform_of
 
 # Эти строки «Скачать всё» берёт в работу; ошибки — только через «Повторить»
-_STARTABLE = ("queued", downloader.STOPPED)
+_STARTABLE = ("queued", PROBING, READY, downloader.STOPPED)
+# Эти в итог по размеру не входят
+_FINISHED = (downloader.DONE, downloader.ALREADY, downloader.ERROR)
 
 
 class _UpdateSignals(QObject):
@@ -84,9 +87,7 @@ class MainWindow(QMainWindow):
         for caption, height in config.YOUTUBE_QUALITIES:
             self.quality_box.addItem(caption, height)
         self.quality_box.setCurrentIndex(max(0, self.quality_box.findData(settings.load_quality())))
-        self.quality_box.currentIndexChanged.connect(
-            lambda _: settings.save_quality(self.quality_box.currentData())
-        )
+        self.quality_box.currentIndexChanged.connect(self._on_quality_changed)
         self.quality_box.setToolTip(
             "Если у видео нет такого качества, берётся ближайшее меньшее.\n"
             "До 1080p файлы открываются везде; 1440p и 4K — в форматах VP9/AV1, "
@@ -119,7 +120,14 @@ class MainWindow(QMainWindow):
             lambda w, status, message, path: w.set_status(status, message, Path(path) if path else None)
         )
         self.queue.progress.connect(lambda w, done, total: w.set_progress(done, total or None))
+        self.queue.status.connect(lambda *_: self._update_total())
+        self.queue.probed.connect(self._on_probed)
+        self.queue.probe_failed.connect(self._on_probe_failed)
         self.queue.idle.connect(self._on_idle)
+
+        # Итог по списку — справа в строке состояния
+        self.total_label = QLabel()
+        self.statusBar().addPermanentWidget(self.total_label)
         controls = QHBoxLayout()
         controls.addWidget(self.download_all)
         controls.addWidget(self.stop_button)
@@ -271,10 +279,15 @@ class MainWindow(QMainWindow):
             return
         known = {w.url for w in self.items()}
         new = [url for url in found if url not in known]
+        quality = self.quality_box.currentData()
         for url in new:
-            self._add_item(url)
+            widget = self._add_item(url)
+            # Сразу узнаём автора, обложку и размер — в фоне
+            widget.set_status(PROBING)
+            self.queue.probe(widget, url, quality)
         self.input.clear()
         self._update_empty_hint()
+        self._update_total()
         skipped = len(found) - len(new)
         if skipped:
             self.statusBar().showMessage(
@@ -298,6 +311,47 @@ class MainWindow(QMainWindow):
             self.queue.forget(widget)
         self.list.clear()
         self._update_empty_hint()
+        self._update_total()
+
+    # --- проверка ссылок и размеры ---
+
+    def _on_probed(self, widget: ItemWidget, info: dict, size: int | None, exact: bool, when: float) -> None:
+        widget.set_info(info, when)
+        widget.set_size(size, exact)
+        if widget.status == PROBING:  # если уже нажали «Скачать», статус не трогаем
+            widget.set_status(READY)
+        self._update_total()
+
+    def _on_probe_failed(self, widget: ItemWidget, message: str) -> None:
+        if widget.status == PROBING:
+            widget.set_status(downloader.ERROR, message)
+        self._update_total()
+
+    def _on_quality_changed(self) -> None:
+        quality = self.quality_box.currentData()
+        settings.save_quality(quality)
+        # Размер YouTube зависит от качества — пересчитываем по уже полученным данным, без сети
+        for widget in self.items():
+            if widget.info is not None and platform_of(widget.url) == YOUTUBE:
+                widget.set_size(*downloader.estimate_size(widget.url, widget.info, quality))
+        self._update_total()
+
+    def _update_total(self) -> None:
+        """«Видео: 5 · ≈ 120 МБ» — по тем, что ещё не скачаны."""
+        pending = [w for w in self.items() if w.status not in _FINISHED]
+        if not pending:
+            self.total_label.setText("")
+            return
+        known = [w for w in pending if w.size is not None]
+        total = sum(w.size for w in known)
+        exact = all(w.size_exact for w in known) and len(known) == len(pending)
+        text = f"Видео: {len(pending)}"
+        if known:
+            text += " · " + sizes.estimate_text(total, exact)
+        unknown = len(pending) - len(known)
+        if unknown:
+            text += f" (без размера: {unknown})"
+        self.total_label.setText(text)
 
     # --- загрузки ---
 
@@ -312,14 +366,17 @@ class MainWindow(QMainWindow):
 
     def _enqueue(self, widget: ItemWidget) -> None:
         widget.set_status("queued")
+        # Свежие данные проверки берём с собой — не спрашиваем площадку второй раз
+        fresh = widget.info is not None and time.time() - widget.info_time < config.INFO_FRESH_SECONDS
         # Каждая площадка — в свою подпапку: …\YouTube, …\TikTok и т. д.
         self.queue.add(
-            widget, widget.url, self.folder / platform_of(widget.url), self.quality_box.currentData()
+            widget, widget.url, self.folder / platform_of(widget.url), self.quality_box.currentData(),
+            widget.info if fresh else None,
         )
 
     def stop_all(self) -> None:
         for widget in self.queue.stop_all():
-            widget.set_status("queued")
+            widget.set_status(READY if widget.info is not None else "queued")
         self.statusBar().showMessage("Загрузки остановлены.", 5000)
 
     def _on_idle(self) -> None:

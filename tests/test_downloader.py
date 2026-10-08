@@ -45,6 +45,17 @@ class PickFormatXTest(unittest.TestCase):
     def test_only_split_streams(self):
         self.assertIsNone(pick_format(self.X_FORMATS[:2], "X"))
 
+    def test_silent_video(self):
+        # Немой ролик Instagram: звука нет нигде — берём картинку
+        silent = [
+            {"format_id": "a", "vcodec": None, "acodec": "none", "height": 640},
+            {"format_id": "dash-v", "vcodec": "avc1", "acodec": "none", "height": 640, "tbr": 900},
+        ]
+        self.assertIsNotNone(pick_format(silent, "Instagram"))
+        # А если звук где-то есть — немую картинку одну не берём (её надо склеить)
+        with_audio = silent + [{"format_id": "dash-a", "vcodec": "none", "acodec": "mp4a"}]
+        self.assertIsNone(pick_format(with_audio, "Instagram"))
+
     def test_watermark_only_for_tiktok(self):
         wm = [{"format_id": "a", "format_note": "watermarked", "vcodec": "h264", "acodec": "aac"}]
         self.assertIsNone(pick_format(wm, "TikTok"))
