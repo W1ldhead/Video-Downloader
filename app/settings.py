@@ -4,6 +4,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, QStandardPaths
 
+from app import config
+
 _ORG = "TikTokDownloader"
 _APP = "TikTokDownloader"
 
@@ -26,3 +28,14 @@ def load_folder() -> Path:
 
 def save_folder(folder: Path) -> None:
     _store().setValue("folder", str(folder))
+
+
+def load_quality() -> int:
+    """Качество YouTube — высота кадра (0 — максимальное)."""
+    value = _store().value("youtube_quality", config.YOUTUBE_DEFAULT_QUALITY, type=int)
+    allowed = {height for _, height in config.YOUTUBE_QUALITIES}
+    return value if value in allowed else config.YOUTUBE_DEFAULT_QUALITY
+
+
+def save_quality(height: int) -> None:
+    _store().setValue("youtube_quality", height)

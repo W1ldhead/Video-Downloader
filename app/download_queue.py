@@ -22,11 +22,12 @@ class _Bridge(QObject):
 
 
 class _Job(QRunnable):
-    def __init__(self, job_id: int, url: str, folder: Path, bridge: _Bridge) -> None:
+    def __init__(self, job_id: int, url: str, folder: Path, quality: int, bridge: _Bridge) -> None:
         super().__init__()
         self.job_id = job_id
         self.url = url
         self.folder = folder
+        self.quality = quality  # для YouTube
         self.bridge = bridge
         self.cancel = threading.Event()
 
@@ -50,7 +51,7 @@ class _Job(QRunnable):
                 b.status.emit(jid, downloader.DOWNLOADING, f"видео {number} из {count}", "")
 
         result = downloader.download(
-            self.url, self.folder, on_info, on_progress, self.cancel.is_set, on_part
+            self.url, self.folder, on_info, on_progress, self.cancel.is_set, on_part, self.quality
         )
         b.status.emit(jid, result.status, result.message, str(result.path or ""))
         b.finished.emit(jid)
@@ -80,7 +81,7 @@ class DownloadQueue(QObject):
         self._pool.setMaxThreadCount(config.MAX_PARALLEL)
         self._bridge = _Bridge()
         self._ids = count(1)
-        self._waiting: deque[tuple[object, str, Path]] = deque()
+        self._waiting: deque[tuple[object, str, Path, int]] = deque()
         self._running: dict[int, tuple[object, _Job]] = {}
 
         self._bridge.info.connect(lambda j, a: self._forward(self.info, j, a))
@@ -91,19 +92,19 @@ class DownloadQueue(QObject):
 
     def is_busy(self, key: object) -> bool:
         """Ждёт в очереди или уже качается."""
-        return any(k is key for k, _, _ in self._waiting) or any(
+        return any(w[0] is key for w in self._waiting) or any(
             k is key for k, _ in self._running.values()
         )
 
-    def add(self, key: object, url: str, folder: Path) -> None:
+    def add(self, key: object, url: str, folder: Path, quality: int) -> None:
         if self.is_busy(key):
             return
-        self._waiting.append((key, url, folder))
+        self._waiting.append((key, url, folder, quality))
         self._start_more()
 
     def stop_all(self) -> list[object]:
         """Прерывает текущие загрузки и снимает ожидающие. Возвращает снятые из ожидания."""
-        removed = [key for key, _, _ in self._waiting]
+        removed = [w[0] for w in self._waiting]
         self._waiting.clear()
         for _, job in self._running.values():
             job.cancel.set()
@@ -124,8 +125,8 @@ class DownloadQueue(QObject):
 
     def _start_more(self) -> None:
         while self._waiting and len(self._running) < config.MAX_PARALLEL:
-            key, url, folder = self._waiting.popleft()
-            job = _Job(next(self._ids), url, folder, self._bridge)
+            key, url, folder, quality = self._waiting.popleft()
+            job = _Job(next(self._ids), url, folder, quality, self._bridge)
             self._running[job.job_id] = (key, job)
             self._pool.start(job)
 

@@ -9,8 +9,8 @@ from typing import Callable
 import yt_dlp
 from yt_dlp.utils import DownloadError
 
-from app import cookies
-from app.links import INSTAGRAM, TIKTOK, X, platform_of
+from app import config, cookies, vendor
+from app.links import INSTAGRAM, TIKTOK, X, YOUTUBE, platform_of
 
 # Статусы для интерфейса
 FETCHING = "fetching"        # получение данных
@@ -54,8 +54,9 @@ _BASE_OPTIONS = {
     "no_warnings": True,
     "noprogress": True,
     "logger": _SilentLogger(),
-    "fixup": "never",  # ffmpeg не нужен: выбираем файлы, где видео и звук вместе
+    "fixup": "never",  # исправления файлов не нужны, только склейка картинки и звука
     "color": {"stdout": "never", "stderr": "never"},  # без кодов цвета в тексте ошибок
+    **vendor.ytdlp_options(),  # встроенные ffmpeg и Deno
 }
 
 # Если готового файла со звуком нет — пусть yt-dlp склеит лучшие картинку и звук (нужен ffmpeg)
@@ -63,7 +64,10 @@ _MERGE_FORMAT = "bv*+ba/b"
 
 
 def _ydl(extra: dict | None = None, platform: str | None = None) -> yt_dlp.YoutubeDL:
-    ydl = yt_dlp.YoutubeDL({**_BASE_OPTIONS, **(extra or {})})
+    options = {**_BASE_OPTIONS, **(extra or {})}
+    if platform == YOUTUBE:
+        options["noplaylist"] = True  # ссылка вида watch?v=…&list=… — только само видео
+    ydl = yt_dlp.YoutubeDL(options)
     # Только вход этой площадки. Грузим вручную, а не через "cookiefile":
     # тогда yt-dlp не перезаписывает файл
     if cookies.is_set(platform):
@@ -103,6 +107,51 @@ def pick_format(formats: list[dict], platform: str | None = TIKTOK) -> dict | No
             f.get("filesize") or 0,
         ),
     )
+
+
+def youtube_pick(formats: list[dict], quality: int) -> tuple[str, str | None] | None:
+    """Выбор для YouTube: (id картинки, id звука или None) или None, если видео нет.
+
+    quality — высота кадра (0 — максимальная). Берём наибольшую высоту не выше
+    quality, а если таких нет — наименьшую из имеющихся. До YOUTUBE_H264_UP_TO
+    на этой высоте предпочитаем h264. Звук — лучше AAC (m4a): с mp4 дружит везде.
+    """
+    def is_hls(f: dict) -> bool:
+        return "m3u8" in (f.get("protocol") or "")
+
+    videos = [f for f in formats if f.get("vcodec") not in (None, "none") and f.get("height")]
+    if not videos:
+        return None
+    heights = sorted({f["height"] for f in videos})
+    fitting = [h for h in heights if not quality or h <= quality]
+    height = max(fitting) if fitting else min(heights)
+
+    def video_rank(f: dict) -> tuple:
+        h264 = (f.get("vcodec") or "").startswith(("avc1", "h264"))
+        return (
+            h264 if height <= config.YOUTUBE_H264_UP_TO else True,
+            not is_hls(f),
+            f.get("acodec") in (None, "none"),  # чистая картинка: звук подберём лучший
+            f.get("fps") or 0,
+            f.get("tbr") or 0,
+        )
+
+    video = max((f for f in videos if f["height"] == height), key=video_rank)
+    if video.get("acodec") not in (None, "none"):
+        return video["format_id"], None  # уже со звуком
+
+    audios = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")]
+    if not audios:
+        return video["format_id"], None
+    audio = max(
+        audios,
+        key=lambda f: (
+            (f.get("acodec") or "").startswith("mp4a"),
+            not is_hls(f),
+            f.get("abr") or f.get("tbr") or 0,
+        ),
+    )
+    return video["format_id"], audio["format_id"]
 
 
 def safe_name(text: str) -> str:
@@ -195,6 +244,10 @@ def _author(info: dict, platform: str | None) -> str:
     if platform == INSTAGRAM:
         # у Instagram ник лежит в channel, а uploader_id — число
         return info.get("channel") or info.get("uploader") or "unknown"
+    if platform == YOUTUBE:
+        # uploader_id — «@ник» канала; у старых каналов его нет — тогда название
+        handle = (info.get("uploader_id") or "").lstrip("@")
+        return handle or info.get("channel") or info.get("uploader") or "unknown"
     return info.get("uploader") or info.get("uploader_id") or info.get("channel") or "unknown"
 
 
@@ -254,12 +307,20 @@ def fetch_info(url: str) -> tuple[VideoInfo, dict]:
     return video, info
 
 
-def _format_selector(platform: str | None):
+def _format_selector(platform: str | None, quality: int):
     """Функция выбора формата для yt-dlp: наш выбор, а если готового файла нет — склейка."""
-    with _ydl() as ydl:
-        merge = ydl.build_format_selector(_MERGE_FORMAT)
+    # merge_output_format здесь обязателен: расширение склейки решает этот экземпляр,
+    # без него для VP9/AV1 (1440p, 4K) выходит .mkv
+    ydl = _ydl({"merge_output_format": "mp4"})
+    merge = ydl.build_format_selector(_MERGE_FORMAT)
 
     def select(ctx: dict):
+        if platform == YOUTUBE:
+            picked = youtube_pick(ctx["formats"], quality)
+            spec = "+".join(p for p in picked if p) if picked else _MERGE_FORMAT
+            # Сборку «картинка+звук» по номерам форматов делает сам yt-dlp
+            yield from ydl.build_format_selector(spec)(ctx)
+            return
         fmt = pick_format(ctx["formats"], platform)
         if fmt is not None:
             yield fmt
@@ -277,6 +338,7 @@ def download(
     on_progress: Callable[[int, int | None], None] = lambda done, total: None,
     should_stop: Callable[[], bool] = lambda: False,
     on_part: Callable[[int, int], None] = lambda number, count: None,
+    quality: int = config.YOUTUBE_DEFAULT_QUALITY,
 ) -> Result:
     """Скачивает все видео по ссылке. Исключений наружу не бросает — всё в Result."""
     target: Path | None = None
@@ -306,7 +368,7 @@ def download(
                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
                 on_progress(int(d.get("downloaded_bytes") or 0), int(total) if total else None)
 
-        selector = _format_selector(platform)
+        selector = _format_selector(platform, quality)
         for number, (entry, target) in enumerate(zip(entries, targets), start=1):
             if target.exists():
                 continue  # скачан в прошлый раз

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QRunnable, QThreadPool, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app import cookies, downloader, settings, updater
+from app import config, cookies, downloader, settings, updater
 from app.download_queue import DownloadQueue
 from app.item_widget import ItemWidget
 from app.links import PLATFORMS, find_links, platform_of
@@ -77,6 +78,23 @@ class MainWindow(QMainWindow):
         folder_row.addWidget(QLabel("Папка:"))
         folder_row.addWidget(self.folder_edit, 1)
         folder_row.addWidget(choose)
+
+        # Качество YouTube (запоминается)
+        self.quality_box = QComboBox()
+        for caption, height in config.YOUTUBE_QUALITIES:
+            self.quality_box.addItem(caption, height)
+        self.quality_box.setCurrentIndex(max(0, self.quality_box.findData(settings.load_quality())))
+        self.quality_box.currentIndexChanged.connect(
+            lambda _: settings.save_quality(self.quality_box.currentData())
+        )
+        self.quality_box.setToolTip(
+            "Если у видео нет такого качества, берётся ближайшее меньшее.\n"
+            "До 1080p файлы открываются везде; 1440p и 4K — в форматах VP9/AV1, "
+            "старые проигрыватели могут их не открыть."
+        )
+        folder_row.addSpacing(12)
+        folder_row.addWidget(QLabel("Качество YouTube:"))
+        folder_row.addWidget(self.quality_box)
 
         # Список загрузок
         self.list = QListWidget()
@@ -295,7 +313,9 @@ class MainWindow(QMainWindow):
     def _enqueue(self, widget: ItemWidget) -> None:
         widget.set_status("queued")
         # Каждая площадка — в свою подпапку: …\YouTube, …\TikTok и т. д.
-        self.queue.add(widget, widget.url, self.folder / platform_of(widget.url))
+        self.queue.add(
+            widget, widget.url, self.folder / platform_of(widget.url), self.quality_box.currentData()
+        )
 
     def stop_all(self) -> None:
         for widget in self.queue.stop_all():

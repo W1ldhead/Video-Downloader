@@ -51,6 +51,60 @@ class PickFormatXTest(unittest.TestCase):
         self.assertEqual(pick_format(wm, "X")["format_id"], "a")
 
 
+class YoutubePickTest(unittest.TestCase):
+    # Похоже на YouTube: раздельные картинка и звук + один цельный 360p
+    F = [
+        {"format_id": "140", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 129},
+        {"format_id": "251", "vcodec": "none", "acodec": "opus", "abr": 160},
+        {"format_id": "18", "vcodec": "avc1.42001E", "acodec": "mp4a.40.2", "height": 360, "tbr": 500},
+        {"format_id": "134", "vcodec": "avc1.4d401e", "acodec": "none", "height": 360, "tbr": 300},
+        {"format_id": "136", "vcodec": "avc1.4d401f", "acodec": "none", "height": 720, "tbr": 1500},
+        {"format_id": "247", "vcodec": "vp9", "acodec": "none", "height": 720, "tbr": 1600},
+        {"format_id": "137", "vcodec": "avc1.640028", "acodec": "none", "height": 1080, "tbr": 4000},
+        {"format_id": "248", "vcodec": "vp9", "acodec": "none", "height": 1080, "tbr": 2600},
+        {"format_id": "271", "vcodec": "vp9", "acodec": "none", "height": 1440, "tbr": 9000},
+        {"format_id": "401", "vcodec": "av01.0.12M.08", "acodec": "none", "height": 2160, "tbr": 18000},
+        {"format_id": "313", "vcodec": "vp9", "acodec": "none", "height": 2160, "tbr": 20000},
+        {"format_id": "hls-1080", "vcodec": "avc1", "acodec": "none", "height": 1080, "tbr": 9999,
+         "protocol": "m3u8_native"},
+    ]
+
+    def pick(self, quality):
+        from app.downloader import youtube_pick
+
+        return youtube_pick(self.F, quality)
+
+    def test_1080_prefers_h264_and_aac(self):
+        self.assertEqual(self.pick(1080), ("137", "140"))
+
+    def test_720(self):
+        self.assertEqual(self.pick(720), ("136", "140"))
+
+    def test_1440_takes_best_codec(self):
+        self.assertEqual(self.pick(1440), ("271", "140"))
+
+    def test_max_and_4k(self):
+        self.assertEqual(self.pick(0), ("313", "140"))
+        self.assertEqual(self.pick(2160), ("313", "140"))
+
+    def test_360_prefers_video_only_plus_best_audio(self):
+        self.assertEqual(self.pick(360), ("134", "140"))
+
+    def test_lower_than_everything_takes_smallest(self):
+        self.assertEqual(self.pick(240), ("134", "140"))
+
+    def test_missing_height_takes_next_lower(self):
+        only = [f for f in self.F if f.get("height") != 1080]
+        from app.downloader import youtube_pick
+
+        self.assertEqual(youtube_pick(only, 1080), ("136", "140"))
+
+    def test_no_video(self):
+        from app.downloader import youtube_pick
+
+        self.assertIsNone(youtube_pick(self.F[:2], 1080))
+
+
 class ResolveTest(unittest.TestCase):
     """Короткая ссылка приходит как «ссылка на ссылку» — надо дойти до видео."""
 
