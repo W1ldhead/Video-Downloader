@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      width: 300px;
+      margin: 0;
+      padding: 14px;
+      font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+    }
+    h1 { font-size: 15px; margin: 0 0 10px; }
+    fieldset { border: 1px solid #ccc; border-radius: 6px; margin: 0 0 12px; padding: 8px 10px; }
+    legend { color: #666; padding: 0 4px; }
+    label { display: block; margin: 4px 0; cursor: pointer; }
+    button {
+      width: 100%;
+      padding: 9px;
+      font-size: 14px;
+      font-weight: 600;
+      border: 0;
+      border-radius: 6px;
+      background: #2563eb;
+      color: #fff;
+      cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    #status { margin-top: 10px; min-height: 18px; color: #2e7d32; }
+    #status.error { color: #c62828; }
+    .hint { color: #888; font-size: 12px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Сохранить cookies.txt</h1>
+
+  <fieldset>
+    <legend>Какие cookies</legend>
+    <label><input type="radio" name="scope" value="site" checked> Только этот сайт</label>
+    <label><input type="radio" name="scope" value="all"> Все сайты (один файл)</label>
+  </fieldset>
+
+  <button id="save">Сохранить файл</button>
+  <div id="status"></div>
+  <div class="hint">Файл сохраняется на ваш компьютер. Расширение не отправляет данные в интернет.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
