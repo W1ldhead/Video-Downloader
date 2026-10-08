@@ -21,7 +21,7 @@ def main() -> int:
         return selftest.run(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else None)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("TikTok Downloader")
+    app.setApplicationName("Video Downloader")
     window = MainWindow()
     window.show()
     return app.exec()

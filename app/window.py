@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from app import cookies, downloader, settings, updater
 from app.download_queue import DownloadQueue
 from app.item_widget import ItemWidget
-from app.links import find_links
+from app.links import find_links, platform_of
 
 # Эти строки «Скачать всё» берёт в работу; ошибки — только через «Повторить»
 _STARTABLE = ("queued", downloader.STOPPED)
@@ -54,13 +54,14 @@ class _UpdateTask(QRunnable):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("TikTok Downloader")
+        self.setWindowTitle("Video Downloader")
         self.resize(720, 680)
 
         # Поле ссылок и «Добавить»
         self.input = QPlainTextEdit()
         self.input.setPlaceholderText(
-            "Вставьте сюда ссылки на видео TikTok — одну, несколько или кусок переписки"
+            "Вставьте сюда ссылки на видео из TikTok, YouTube, Instagram или X — "
+            "одну, несколько или кусок переписки"
         )
         self.input.setFixedHeight(110)
         self.add_button = QPushButton("Добавить")
@@ -225,8 +226,9 @@ class MainWindow(QMainWindow):
         if not found:
             QMessageBox.information(
                 self, "Ссылки не найдены",
-                "В тексте нет ссылок на видео TikTok.\n\n"
-                "Подходят ссылки вида tiktok.com/@автор/video/…, vm.tiktok.com/… и vt.tiktok.com/…",
+                "В тексте нет ссылок на видео.\n\n"
+                "Подходят ссылки на видео из TikTok, YouTube (и Shorts), Instagram (Reels и посты) "
+                "и X (Twitter) — например youtu.be/…, instagram.com/reel/…, x.com/…/status/…",
             )
             return
         known = {w.url for w in self.items()}
@@ -272,7 +274,8 @@ class MainWindow(QMainWindow):
 
     def _enqueue(self, widget: ItemWidget) -> None:
         widget.set_status("queued")
-        self.queue.add(widget, widget.url, self.folder)
+        # Каждая площадка — в свою подпапку: …\YouTube, …\TikTok и т. д.
+        self.queue.add(widget, widget.url, self.folder / platform_of(widget.url))
 
     def stop_all(self) -> None:
         for widget in self.queue.stop_all():

@@ -13,10 +13,10 @@ def _store() -> QSettings:
 
 
 def default_folder() -> Path:
-    """Загрузки\\TikTok."""
+    """Загрузки\\Video Downloader (внутри — подпапки площадок)."""
     downloads = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
     base = Path(downloads) if downloads else Path.home() / "Downloads"
-    return base / "TikTok"
+    return base / "Video Downloader"
 
 
 def load_folder() -> Path:

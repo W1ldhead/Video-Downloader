@@ -15,6 +15,7 @@
 1. (2026-10-07) Все три пункта раздела 6 ТЗ подтверждены: выбранная папка запоминается между запусками, одновременно идут 2–3 загрузки, в меню есть «Обновить загрузчик».
 2. Проект лежит в отдельной папке `Desktop\TikTok Downloader` со своим git-репозиторием.
 3. Python пользователь поставил сам с python.org — версия 3.13.12 (вместо 3.12, подходит).
+5. (2026-10-08, изменение ТЗ по просьбе пользователя — раздел 4 «другие платформы» снят) Добавляются YouTube (обычные и Shorts), Instagram, X (Twitter). ffmpeg и Deno (для YouTube) встраиваются в .exe. Качество YouTube: Максимальное · 2160p · 1440p · 1080p (по умолчанию) · 720p · 480p · 360p, при отсутствии — ближайшее меньшее, всегда mp4; выбор в окне рядом с папкой, запоминается. Программа переименована в «Video Downloader», папка по умолчанию `Загрузки\Video Downloader` (внутренние имена — реестр TikTokDownloader и `%LOCALAPPDATA%\TikTokDownloader` — не меняем, чтобы не потерять настройки и cookies). Рядом с .exe — файл лицензии ffmpeg. Файлы — в подпапках по площадкам (TikTok\, YouTube\, Instagram\, X\) выбранной папки, имя `автор_id.mp4`. Вход — отдельный cookies.txt для каждой площадки (вход из браузера и окно входа — не делаем).
 4. (2026-10-07, сверх ТЗ по просьбе пользователя) Видео 18+ («Log in for access») — через файл cookies.txt: пользователь сохраняет его расширением «Get cookies.txt LOCALLY» и указывает в меню «Загрузчик». Варианты «cookies из браузера» и «окно входа в программе» отклонены (Chrome/Edge шифруют cookies; +150 МБ к .exe).
 
 ## Окружение
@@ -29,6 +30,9 @@
 5. «Обновить загрузчик» в меню (способ для .exe решить на этом шаге).
 6. Сборка одного .exe через PyInstaller и проверка на чистом запуске.
 
+## План 2 (несколько площадок, согласован 2026-10-08)
+7. Ссылки YouTube/Instagram/X, определение площадки, подпапки, переименование → 8. X → 9. Instagram → 10. «Аккаунты»: cookies на площадку (перенос TikTok) → 11. YouTube: ffmpeg + Deno, выбор качества → 12. Сборка, размер, скорость запуска.
+
 ## Текущий прогресс
 - Шаг 0 готов: папка, ТЗ в `docs/`, git, Python 3.13.12, `.venv` с yt-dlp, PySide6, PyInstaller.
 - Шаг 1: `app/links.py` — find_links(text): полные /@автор/video/ID, m.tiktok.com/v/ID.html, vm./vt. и /t/ короткие; хвостовые знаки и параметры отрезаются; дубли по id видео (короткие — по коду). Профили, музыка, чужие домены — пропускаются. Проверки: `.venv\Scripts\python.exe -m unittest -v`. Подтверждён.
@@ -40,6 +44,8 @@
 - Шаг 5а (cookies, решение 4): `app/cookies.py` — check (формат Netscape, есть cookies TikTok, есть sessionid, предупреждение если истёк), install (копия в `%LOCALAPPDATA%\TikTokDownloader\cookies.txt`, для проверок TIKTOKDL_DATA_DIR), remove. downloader._ydl грузит cookies вручную через `ydl.cookiejar.load` (НЕ параметр cookiefile — иначе yt-dlp перезаписывает файл при закрытии, а качаем по 3 сразу). explain: коды цвета ANSI вырезаются, «Видео 18+» — разный текст с cookies и без. Меню: «Указать файл cookies (для видео 18+)…», «Удалить cookies», «Cookies: указаны/не указаны». 29 проверок OK. Ждём проверки пользователем со своим файлом.
 - Шаг 5а подтверждён пользователем (видео 18+ скачивается с cookies).
 - Шаг 6: `build.ps1` → `dist\TikTok Downloader.exe` (~57 МБ, onefile, windowed; dist/ и build/ в .gitignore). updater.activate ставит `_WheelFinder` первым в sys.meta_path (в .exe встроенные модули находятся раньше sys.path — простой sys.path.insert не работает). `main.py --selftest отчёт.txt [ссылка]` (`app/selftest.py`) — проверка .exe без окна: версии yt-dlp, источник, curl_cffi и цели impersonate, данные видео. Проверено: .exe без Python в PATH — всё OK; с подложенным .whl «2099.1.1» работает из него; окно открывается. Ждём проверки пользователем.
+- Шаг 6 (.exe) подтверждён пользователем. ТЗ выполнено; дальше — план 2.
+- Шаг 7: `app/links.py` — площадки TIKTOK/YOUTUBE/INSTAGRAM/X (имена = подпапки), find_links для всех четырёх (YouTube: watch?v=, youtu.be, shorts, live — дубли по id; Instagram: reel/reels/p/tv, в т. ч. после имени автора — дубли по коду; X: x.com/twitter.com/mobile, /i/status — дубли по id), platform_of(url). Окно кладёт файлы в `папка\<площадка>`. Переименование: окно и .exe «Video Downloader», папка по умолчанию `Загрузки\Video Downloader`. 46 проверок OK. Ждём подтверждения.
 - **Для сборки .exe:** `--copy-metadata yt-dlp` (иначе bundled_version() = 0 и любой .whl будет считаться новее), собрать curl_cffi целиком.
 - **Важно:** без curl_cffi TikTok отдаёт yt-dlp страницу-проверку («Unexpected response from webpage request») — ставить `yt-dlp[curl-cffi]`, при сборке .exe не потерять curl_cffi.
 - Тестовое видео: `https://www.tiktok.com/@hankgreen1/video/7047596209028074758` (скачивается); `@leenabhushan/video/6748451240264420610` — «IP заблокирован» (проверка ошибки региона).
