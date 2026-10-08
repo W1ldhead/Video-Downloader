@@ -1,6 +1,6 @@
-"""Файл cookies.txt — вход в аккаунт TikTok для видео с ограничением по возрасту.
+"""Файлы cookies.txt — вход в аккаунт, отдельно для каждой площадки.
 
-Программа хранит копию файла в своей папке данных и только читает её.
+Программа хранит копии файлов в своей папке данных и только читает их.
 """
 
 import os
@@ -9,6 +9,16 @@ import time
 from pathlib import Path
 
 from yt_dlp.cookies import YoutubeDLCookieJar
+
+from app.links import INSTAGRAM, TIKTOK, X, YOUTUBE
+
+# Домены площадки и cookies, по которым видно, что вход выполнен (хватит любого из них)
+_SITES = {
+    TIKTOK: (("tiktok.com",), ("sessionid",)),
+    INSTAGRAM: (("instagram.com",), ("sessionid",)),
+    X: (("x.com", "twitter.com"), ("auth_token",)),
+    YOUTUBE: (("youtube.com", "google.com"), ("LOGIN_INFO", "SAPISID", "__Secure-3PAPISID", "__Secure-1PSID")),
+}
 
 
 class CookieError(Exception):
@@ -24,16 +34,35 @@ def data_dir() -> Path:
     return Path(base) / "TikTokDownloader"
 
 
-def stored_path() -> Path:
-    return data_dir() / "cookies.txt"
+def stored_path(platform: str) -> Path:
+    _migrate()
+    return data_dir() / "cookies" / f"{platform}.txt"
 
 
-def is_set() -> bool:
-    return stored_path().is_file()
+def _migrate() -> None:
+    """До шага 10 был один файл cookies.txt — он от TikTok."""
+    old = data_dir() / "cookies.txt"
+    if old.is_file():
+        new = data_dir() / "cookies" / f"{TIKTOK}.txt"
+        new.parent.mkdir(parents=True, exist_ok=True)
+        if not new.exists():
+            old.replace(new)
+        else:
+            old.unlink()
 
 
-def check(path: Path) -> str:
+def is_set(platform: str | None) -> bool:
+    return platform in _SITES and stored_path(platform).is_file()
+
+
+def _on_site(domain: str, domains: tuple[str, ...]) -> bool:
+    domain = domain.lstrip(".").lower()
+    return any(domain == d or domain.endswith("." + d) for d in domains)
+
+
+def check(path: Path, platform: str) -> str:
     """Проверяет файл. Возвращает предупреждение (или ""), при негодном файле — CookieError."""
+    domains, login_names = _SITES[platform]
     jar = YoutubeDLCookieJar()
     try:
         jar.load(str(path))
@@ -42,29 +71,30 @@ def check(path: Path) -> str:
             "Это не файл cookies.txt (формат Netscape). "
             "Сохраните его расширением «Get cookies.txt LOCALLY»."
         ) from e
-    tiktok = [c for c in jar if c.domain.lstrip(".").endswith("tiktok.com")]
-    if not tiktok:
+    site = [c for c in jar if _on_site(c.domain, domains)]
+    if not site:
         raise CookieError(
-            "В файле нет cookies TikTok. Откройте tiktok.com в браузере и сохраните файл на этой странице."
+            f"В файле нет cookies {platform}. Откройте {domains[0]} в браузере "
+            "и сохраните файл, находясь на этой странице."
         )
-    session = [c for c in tiktok if c.name == "sessionid"]
-    if not session:
+    login = [c for c in site if c.name in login_names]
+    if not login:
         raise CookieError(
-            "В файле нет входа в аккаунт. Войдите в TikTok в браузере и сохраните файл заново."
+            f"В файле нет входа в аккаунт {platform}. Войдите в аккаунт в браузере и сохраните файл заново."
         )
-    if all(c.expires and c.expires < time.time() for c in session):
-        return "Вход в этом файле уже истёк — скорее всего, TikTok его не примет. Сохраните файл заново."
+    if all(c.expires and c.expires < time.time() for c in login):
+        return "Вход в этом файле уже истёк — скорее всего, площадка его не примет. Сохраните файл заново."
     return ""
 
 
-def install(path: Path) -> str:
+def install(path: Path, platform: str) -> str:
     """Проверяет и сохраняет копию. Возвращает предупреждение (или "")."""
-    warning = check(path)
-    target = stored_path()
+    warning = check(path, platform)
+    target = stored_path(platform)
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(path, target)
     return warning
 
 
-def remove() -> None:
-    stored_path().unlink(missing_ok=True)
+def remove(platform: str) -> None:
+    stored_path(platform).unlink(missing_ok=True)

@@ -62,11 +62,12 @@ _BASE_OPTIONS = {
 _MERGE_FORMAT = "bv*+ba/b"
 
 
-def _ydl(extra: dict | None = None) -> yt_dlp.YoutubeDL:
+def _ydl(extra: dict | None = None, platform: str | None = None) -> yt_dlp.YoutubeDL:
     ydl = yt_dlp.YoutubeDL({**_BASE_OPTIONS, **(extra or {})})
-    # Cookies грузим вручную, а не через "cookiefile": тогда yt-dlp не перезаписывает файл
-    if cookies.is_set():
-        ydl.cookiejar.load(str(cookies.stored_path()))
+    # Только вход этой площадки. Грузим вручную, а не через "cookiefile":
+    # тогда yt-dlp не перезаписывает файл
+    if cookies.is_set(platform):
+        ydl.cookiejar.load(str(cookies.stored_path(platform)))
     return ydl
 
 
@@ -115,29 +116,48 @@ def file_path(folder: Path, author: str, video_id: str, number: int | None = Non
     return folder / f"{safe_name(author)}_{safe_name(video_id)}{suffix}.mp4"
 
 
-def explain(error: Exception) -> str:
-    """Короткая понятная причина ошибки."""
+# Ошибки, которые лечатся входом в аккаунт: (фрагмент текста yt-dlp, понятное объяснение)
+_LOGIN_RULES = [
+    # TikTok
+    ("Log in for access", "Видео 18+: нужен вход в аккаунт с подтверждённым возрастом"),
+    # X (Twitter)
+    ("NSFW tweet requires authentication", "Пост с деликатным содержимым: X показывает его только после входа"),
+    ("protected tweet", "Аккаунт закрыт: пост видят только подписчики"),
+    # Instagram
+    ("registered users who follow this account", "Закрытый аккаунт: видео видят только подписчики"),
+    ("exceeded the rate-limit", "Instagram временно ограничил скачивание без входа"),
+    ("Restricted Video", "Видео с ограничением по возрасту или стране"),
+    ("empty media response", "Instagram не отдал видео без входа в аккаунт"),
+    ("This content is unreachable", "Instagram не отдал видео без входа в аккаунт"),
+    # YouTube
+    ("Sign in to confirm your age", "Видео 18+: нужен вход в аккаунт с подтверждённым возрастом"),
+    ("Sign in to confirm you", "YouTube просит подтвердить, что вы не робот: нужен вход в аккаунт"),
+    ("members-only", "Видео только для спонсоров канала"),
+    # Общие
+    ("You need to log in", "Нужен вход в аккаунт"),
+    ("--cookies", "Нужен вход в аккаунт"),  # так yt-dlp заканчивает любые «нужен вход»
+]
+
+
+def _login_hint(platform: str | None) -> str:
+    if cookies.is_set(platform):
+        return ". Указанный вход не подошёл: файл cookies устарел или у аккаунта нет доступа — сохраните файл заново"
+    return ". Укажите вход: меню «Аккаунты»"
+
+
+def explain(error: Exception, platform: str | None = None) -> str:
+    """Короткая понятная причина ошибки (platform — чтобы подсказать про вход)."""
     # yt-dlp раскрашивает текст для терминала — убираем коды цвета
     text = re.sub(r"\x1b\[[0-9;]*m", "", str(error))
-    if "log in for access" in text.lower():
-        if cookies.is_set():
-            return ("Видео 18+: TikTok не принял вход. Файл cookies устарел или в аккаунте "
-                    "не подтверждён возраст — сохраните файл заново")
-        return "Видео 18+: нужен вход в аккаунт. Укажите файл cookies в меню «Загрузчик»"
+    low = text.lower()
+    for needle, message in _LOGIN_RULES:
+        if needle.lower() in low:
+            return message + _login_hint(platform)
     rules = [
         # X (Twitter)
-        ("NSFW tweet requires authentication", "Пост с деликатным содержимым: X показывает его только после входа в аккаунт"),
-        ("protected tweet", "Аккаунт закрыт: пост видят только подписчики"),
         ("No video could be found in this tweet", "В посте нет видео"),
         ("tweet is unavailable", "Пост удалён или недоступен"),
         ("suspended", "Аккаунт заблокирован"),
-        # Instagram
-        ("registered users who follow this account", "Закрытый аккаунт: видео видят только подписчики (нужен вход в Instagram)"),
-        ("exceeded the rate-limit", "Instagram временно ограничил скачивание без входа. Подождите или укажите вход в аккаунт"),
-        ("Restricted Video", "Видео с ограничением (по возрасту или стране): нужен вход в Instagram"),
-        ("empty media response", "Instagram не отдал видео без входа в аккаунт"),
-        ("This content is unreachable", "Instagram не отдал видео без входа в аккаунт"),
-        ("You need to log in", "Нужен вход в аккаунт"),
         # Общие
         ("ffmpeg", "Для этого видео нужен ffmpeg"),
         ("IP address is blocked", "Видео недоступно в вашем регионе"),
@@ -152,7 +172,6 @@ def explain(error: Exception) -> str:
         ("No space left", "На диске не хватает места"),
         ("Permission denied", "Нет доступа к папке"),
     ]
-    low = text.lower()
     for needle, message in rules:
         if needle.lower() in low:
             return message
@@ -188,6 +207,24 @@ def _post_id(url: str, info: dict, platform: str | None) -> str:
     return str(info.get("id") or "")
 
 
+def _resolve(ydl: yt_dlp.YoutubeDL, info: dict, depth: int = 5) -> dict:
+    """Проходит переадресации (короткие ссылки vm.tiktok.com и т. п.) до самого видео.
+
+    Без process=False это делал бы сам yt-dlp; с ним приходит «ссылка на ссылку».
+    """
+    for _ in range(depth):
+        kind = info.get("_type")
+        if kind not in ("url", "url_transparent"):
+            return info
+        target = ydl.extract_info(info["url"], download=False, process=False, ie_key=info.get("ie_key"))
+        if kind == "url_transparent":
+            # Поля обёртки дополняют найденное (так делает и yt-dlp)
+            extra = {k: v for k, v in info.items() if v is not None and k not in ("_type", "url", "ie_key", "id")}
+            target = {**target, **extra}
+        info = target
+    return info
+
+
 def _thumbnail(info: dict) -> str | None:
     if info.get("thumbnail"):
         return info["thumbnail"]
@@ -202,8 +239,8 @@ def fetch_info(url: str) -> tuple[VideoInfo, dict]:
     его выбора, и при скачивании другого формата он берёт их (у X это давало 404).
     """
     platform = _platform(url)
-    with _ydl() as ydl:
-        info = ydl.extract_info(url, download=False, process=False)
+    with _ydl(platform=platform) as ydl:
+        info = _resolve(ydl, ydl.extract_info(url, download=False, process=False))
     if info.get("entries") is not None:
         info["entries"] = [e for e in info["entries"] if e]  # бывает «ленивым» списком
     entries = _entries(info)
@@ -286,7 +323,7 @@ def download(
             }
             if many:
                 options["playlist_items"] = str(number)
-            with _ydl(options) as ydl:
+            with _ydl(options, platform) as ydl:
                 # Копия: yt-dlp дописывает в словарь свои поля
                 ydl.process_ie_result(copy.deepcopy(info), download=True)
             if not target.exists():
@@ -302,10 +339,10 @@ def download(
         _cleanup(target)
         if isinstance(getattr(e, "exc_info", (None, None))[1], _Stopped):
             return Result(STOPPED)
-        return Result(ERROR, message=explain(e))
+        return Result(ERROR, message=explain(e, platform))
     except Exception as e:  # noqa: BLE001 — ошибка одной ссылки не должна ронять остальные
         _cleanup(target)
-        return Result(ERROR, message=explain(e))
+        return Result(ERROR, message=explain(e, platform))
 
 
 def _cleanup(target: Path | None) -> None:

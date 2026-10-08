@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from app import cookies, downloader, settings, updater
 from app.download_queue import DownloadQueue
 from app.item_widget import ItemWidget
-from app.links import find_links, platform_of
+from app.links import PLATFORMS, find_links, platform_of
 
 # Эти строки «Скачать всё» берёт в работу; ошибки — только через «Повторить»
 _STARTABLE = ("queued", downloader.STOPPED)
@@ -134,13 +134,18 @@ class MainWindow(QMainWindow):
         self.version_action = menu.addAction(f"Версия yt-dlp: {updater.running_version()}")
         self.version_action.setEnabled(False)
 
-        menu.addSeparator()
-        choose_cookies = menu.addAction("Указать файл cookies (для видео 18+)…")
-        choose_cookies.triggered.connect(self.choose_cookies)
-        self.remove_cookies_action = menu.addAction("Удалить cookies")
-        self.remove_cookies_action.triggered.connect(self.remove_cookies)
-        self.cookies_state_action = menu.addAction("")
-        self.cookies_state_action.setEnabled(False)
+        # Аккаунты: свой файл cookies у каждой площадки
+        accounts = self.menuBar().addMenu("Аккаунты")
+        self._account_menus = {}
+        for platform in PLATFORMS:
+            sub = accounts.addMenu(platform)
+            choose = sub.addAction("Указать файл cookies…")
+            choose.triggered.connect(lambda _=False, p=platform: self.choose_cookies(p))
+            remove = sub.addAction("Удалить вход")
+            remove.triggered.connect(lambda _=False, p=platform: self.remove_cookies(p))
+            self._account_menus[platform] = (sub, remove)
+        accounts.addSeparator()
+        accounts.addAction("Как сохранить файл cookies?").triggered.connect(self.show_cookies_help)
         self._refresh_cookies_menu()
 
         self._update_signals = _UpdateSignals()
@@ -177,37 +182,52 @@ class MainWindow(QMainWindow):
     # --- cookies ---
 
     def _refresh_cookies_menu(self) -> None:
-        on = cookies.is_set()
-        self.cookies_state_action.setText("Cookies: указаны" if on else "Cookies: не указаны")
-        self.remove_cookies_action.setEnabled(on)
+        for platform, (sub, remove) in self._account_menus.items():
+            on = cookies.is_set(platform)
+            sub.setTitle(f"{platform} — {'вход указан ✓' if on else 'без входа'}")
+            remove.setEnabled(on)
 
-    def choose_cookies(self) -> None:
+    def choose_cookies(self, platform: str) -> None:
         start = str(Path.home() / "Downloads")
         chosen, _ = QFileDialog.getOpenFileName(
-            self, "Файл cookies.txt с входом в TikTok", start, "Файлы cookies (*.txt);;Все файлы (*)"
+            self, f"Файл cookies.txt с входом в {platform}", start, "Файлы cookies (*.txt);;Все файлы (*)"
         )
         if not chosen:
             return
         try:
-            warning = cookies.install(Path(chosen))
+            warning = cookies.install(Path(chosen), platform)
         except cookies.CookieError as e:
-            QMessageBox.warning(self, "Файл cookies", str(e))
+            QMessageBox.warning(self, f"Вход в {platform}", str(e))
             return
         self._refresh_cookies_menu()
         text = (
-            "Файл принят, программа сохранила его копию у себя.\n\n"
-            "Исходный файл лучше удалить из папки — в нём ваш вход в TikTok, "
-            "как пароль.\n\n"
-            "Видео с ошибкой «Видео 18+» теперь можно скачать кнопкой «Повторить»."
+            f"Вход в {platform} принят, программа сохранила копию файла у себя.\n\n"
+            f"Исходный файл лучше удалить из папки — в нём ваш вход в {platform}, как пароль.\n\n"
+            "Видео, которые не скачались из-за входа, теперь можно скачать кнопкой «Повторить»."
         )
         if warning:
             text = warning + "\n\n" + text
-        QMessageBox.information(self, "Файл cookies", text)
+        QMessageBox.information(self, f"Вход в {platform}", text)
 
-    def remove_cookies(self) -> None:
-        cookies.remove()
+    def remove_cookies(self, platform: str) -> None:
+        cookies.remove(platform)
         self._refresh_cookies_menu()
-        self.statusBar().showMessage("Cookies удалены.", 5000)
+        self.statusBar().showMessage(f"Вход в {platform} удалён.", 5000)
+
+    def show_cookies_help(self) -> None:
+        QMessageBox.information(
+            self, "Как сохранить файл cookies",
+            "Файл cookies — это «пропуск», по которому сайт узнаёт, что вы вошли в аккаунт.\n\n"
+            "1. Установите в браузер расширение «Get cookies.txt LOCALLY» "
+            "(в Firefox — «cookies.txt»). Важно: именно LOCALLY.\n"
+            "2. Откройте сайт площадки (tiktok.com, youtube.com, instagram.com или x.com) "
+            "и войдите в аккаунт.\n"
+            "3. Нажмите на значок расширения → «Export». Файл сохранится в «Загрузки».\n"
+            "4. Здесь: «Аккаунты» → площадка → «Указать файл cookies…» и выберите этот файл.\n"
+            "5. Удалите исходный файл из «Загрузок».\n\n"
+            "Для каждой площадки — свой файл. Лучше использовать не основной аккаунт: "
+            "площадки иногда ограничивают аккаунты за частые скачивания.",
+        )
 
     def _restart(self) -> None:
         if getattr(sys, "frozen", False):

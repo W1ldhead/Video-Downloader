@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from app.downloader import explain, file_path, pick_format, safe_name
+from app.downloader import _resolve, explain, file_path, pick_format, safe_name
 
 # Похоже на реальный ответ yt-dlp для TikTok
 FORMATS = [
@@ -49,6 +49,33 @@ class PickFormatXTest(unittest.TestCase):
         wm = [{"format_id": "a", "format_note": "watermarked", "vcodec": "h264", "acodec": "aac"}]
         self.assertIsNone(pick_format(wm, "TikTok"))
         self.assertEqual(pick_format(wm, "X")["format_id"], "a")
+
+
+class ResolveTest(unittest.TestCase):
+    """Короткая ссылка приходит как «ссылка на ссылку» — надо дойти до видео."""
+
+    class FakeYdl:
+        def __init__(self, pages):
+            self.pages = pages
+
+        def extract_info(self, url, download, process, ie_key=None):
+            return self.pages[url]
+
+    def test_follows_redirects(self):
+        video = {"id": "123", "uploader": "cat", "formats": []}
+        ydl = self.FakeYdl({"https://full/1": {"_type": "url", "url": "https://full/2"}, "https://full/2": video})
+        start = {"_type": "url", "url": "https://full/1"}
+        self.assertEqual(_resolve(ydl, start), video)
+
+    def test_transparent_keeps_wrapper_fields(self):
+        ydl = self.FakeYdl({"https://v": {"id": "1", "uploader": "a", "title": None}})
+        start = {"_type": "url_transparent", "url": "https://v", "title": "Заголовок"}
+        result = _resolve(ydl, start)
+        self.assertEqual((result["id"], result["uploader"], result["title"]), ("1", "a", "Заголовок"))
+
+    def test_plain_video_untouched(self):
+        video = {"id": "1"}
+        self.assertIs(_resolve(self.FakeYdl({}), video), video)
 
 
 class FileNameTest(unittest.TestCase):
