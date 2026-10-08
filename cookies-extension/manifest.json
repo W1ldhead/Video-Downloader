@@ -3,10 +3,16 @@
   "name": "cookies.txt для загрузчика",
   "version": "1.0",
   "description": "Сохраняет cookies текущего сайта в файл формата Netscape (cookies.txt) — для входа в Video Downloader. Ничего никуда не отправляет.",
-  "permissions": ["cookies", "downloads", "tabs", "storage"],
+  "permissions": ["cookies", "tabs", "storage"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Сохранить cookies.txt"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "cookies-txt@video-downloader.local",
+      "strict_min_version": "115.0"
+    }
   }
 }

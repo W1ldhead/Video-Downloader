@@ -1,5 +1,8 @@
 "use strict";
 
+// Единый доступ к API: Firefox — browser.* (обещания), Chrome/Edge/Яндекс — chrome.* (тоже обещания в MV3)
+const api = globalThis.browser || globalThis.chrome;
+
 // Имя файла по площадке — совпадает с названиями в Video Downloader
 const PLATFORMS = [
   [/(^|\.)tiktok\.com$/i, "TikTok"],
@@ -47,19 +50,33 @@ function setStatus(text, isError) {
 }
 
 async function currentTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   return tab;
+}
+
+// Сохранение через ссылку с blob — работает одинаково в Chrome и Firefox,
+// файл уходит в папку «Загрузки» (или спросит путь, если так настроен браузер)
+function saveFile(text, filename) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 async function save() {
   const scope = document.querySelector('input[name="scope"]:checked').value;
-  chrome.storage.local.set({ scope });
+  api.storage.local.set({ scope });
 
   let cookies;
   let filename;
   try {
     if (scope === "all") {
-      cookies = await chrome.cookies.getAll({});
+      cookies = await api.cookies.getAll({});
       filename = "cookies.txt";
     } else {
       const tab = await currentTab();
@@ -68,7 +85,7 @@ async function save() {
         return;
       }
       const host = new URL(tab.url).hostname;
-      cookies = await chrome.cookies.getAll({ url: tab.url });
+      cookies = await api.cookies.getAll({ url: tab.url });
       filename = platformName(host) + ".txt";
     }
   } catch (e) {
@@ -81,21 +98,12 @@ async function save() {
     return;
   }
 
-  // data: URL — файл-строка, которая переживёт закрытие окна расширения
-  const text = toNetscape(cookies);
-  const dataUrl = "data:text/plain;charset=utf-8," + encodeURIComponent(text);
-
-  chrome.downloads.download({ url: dataUrl, filename, saveAs: true }, (id) => {
-    if (chrome.runtime.lastError) {
-      setStatus("Ошибка сохранения: " + chrome.runtime.lastError.message, true);
-    } else {
-      setStatus(`Сохранено: ${cookies.length} cookies → ${filename}`);
-    }
-  });
+  saveFile(toNetscape(cookies), filename);
+  setStatus(`Сохранено: ${cookies.length} cookies → ${filename} (папка «Загрузки»)`);
 }
 
 // Восстановить выбор и показать, какой файл получится
-chrome.storage.local.get("scope", ({ scope }) => {
+api.storage.local.get("scope").then(({ scope }) => {
   if (scope) {
     const el = document.querySelector(`input[name="scope"][value="${scope}"]`);
     if (el) el.checked = true;
