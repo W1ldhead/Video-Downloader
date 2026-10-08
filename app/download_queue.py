@@ -45,8 +45,12 @@ class _Job(QRunnable):
         def on_progress(done: int, total: int | None) -> None:
             b.progress.emit(jid, done, total or 0)
 
+        def on_part(number: int, count: int) -> None:
+            if count > 1:
+                b.status.emit(jid, downloader.DOWNLOADING, f"видео {number} из {count}", "")
+
         result = downloader.download(
-            self.url, self.folder, on_info, on_progress, self.cancel.is_set
+            self.url, self.folder, on_info, on_progress, self.cancel.is_set, on_part
         )
         b.status.emit(jid, result.status, result.message, str(result.path or ""))
         b.finished.emit(jid)

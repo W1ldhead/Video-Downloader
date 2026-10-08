@@ -29,7 +29,32 @@ class PickFormatTest(unittest.TestCase):
         self.assertIsNone(pick_format([]))
 
 
+class PickFormatXTest(unittest.TestCase):
+    # Как у X: у цельных mp4 кодеки не подписаны, у потоков HLS картинка и звук отдельно
+    X_FORMATS = [
+        {"format_id": "hls-audio-128000", "protocol": "m3u8_native", "vcodec": "none", "acodec": None},
+        {"format_id": "hls-716", "protocol": "m3u8_native", "vcodec": "avc1.64001F", "acodec": "none", "height": 720},
+        {"format_id": "http-288", "protocol": "https", "height": 270, "tbr": 288},
+        {"format_id": "http-2176", "protocol": "https", "height": 720, "tbr": 2176},
+        {"format_id": "http-832", "protocol": "https", "height": 360, "tbr": 832},
+    ]
+
+    def test_best_progressive_mp4(self):
+        self.assertEqual(pick_format(self.X_FORMATS, "X")["format_id"], "http-2176")
+
+    def test_only_split_streams(self):
+        self.assertIsNone(pick_format(self.X_FORMATS[:2], "X"))
+
+    def test_watermark_only_for_tiktok(self):
+        wm = [{"format_id": "a", "format_note": "watermarked", "vcodec": "h264", "acodec": "aac"}]
+        self.assertIsNone(pick_format(wm, "TikTok"))
+        self.assertEqual(pick_format(wm, "X")["format_id"], "a")
+
+
 class FileNameTest(unittest.TestCase):
+    def test_numbered(self):
+        self.assertEqual(file_path(Path("C:/x"), "NASA", "111", 2), Path("C:/x/NASA_111_2.mp4"))
+
     def test_scheme(self):
         self.assertEqual(file_path(Path("C:/x"), "cat.lover", "123"), Path("C:/x/cat.lover_123.mp4"))
 
@@ -56,6 +81,16 @@ class ExplainTest(unittest.TestCase):
     def test_colored_unknown(self):
         e = Exception("\x1b[0;31mERROR:\x1b[0m [TikTok] 1: Strange thing")
         self.assertEqual(explain(e), "Strange thing")
+
+    def test_x_errors(self):
+        cases = {
+            "ERROR: [twitter] 1: NSFW tweet requires authentication. Use --cookies": "деликатным",
+            "ERROR: [twitter] 1: You are not authorized to view this protected tweet": "Аккаунт закрыт",
+            "ERROR: [twitter] 1: No video could be found in this tweet": "нет видео",
+            "ERROR: [twitter] 1: Requested tweet is unavailable": "удалён",
+        }
+        for text, expected in cases.items():
+            self.assertIn(expected, explain(Exception(text)), text)
 
     def test_unknown_is_short(self):
         e = Exception("ERROR: [TikTok] 123: Something odd happened\nTraceback ...")
