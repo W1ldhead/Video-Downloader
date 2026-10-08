@@ -18,7 +18,9 @@ def main() -> int:
 
         from app import selftest
 
-        return selftest.run(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else None)
+        url = sys.argv[3] if len(sys.argv) > 3 else None
+        folder = Path(sys.argv[4]) if len(sys.argv) > 4 else None
+        return selftest.run(Path(sys.argv[2]), url, folder)
 
     app = QApplication(sys.argv)
     app.setApplicationName("Video Downloader")
