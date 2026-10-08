@@ -10,7 +10,7 @@ import yt_dlp
 from yt_dlp.utils import DownloadError
 
 from app import cookies
-from app.links import TIKTOK, X, platform_of
+from app.links import INSTAGRAM, TIKTOK, X, platform_of
 
 # Статусы для интерфейса
 FETCHING = "fetching"        # получение данных
@@ -131,6 +131,13 @@ def explain(error: Exception) -> str:
         ("No video could be found in this tweet", "В посте нет видео"),
         ("tweet is unavailable", "Пост удалён или недоступен"),
         ("suspended", "Аккаунт заблокирован"),
+        # Instagram
+        ("registered users who follow this account", "Закрытый аккаунт: видео видят только подписчики (нужен вход в Instagram)"),
+        ("exceeded the rate-limit", "Instagram временно ограничил скачивание без входа. Подождите или укажите вход в аккаунт"),
+        ("Restricted Video", "Видео с ограничением (по возрасту или стране): нужен вход в Instagram"),
+        ("empty media response", "Instagram не отдал видео без входа в аккаунт"),
+        ("This content is unreachable", "Instagram не отдал видео без входа в аккаунт"),
+        ("You need to log in", "Нужен вход в аккаунт"),
         # Общие
         ("ffmpeg", "Для этого видео нужен ffmpeg"),
         ("IP address is blocked", "Видео недоступно в вашем регионе"),
@@ -163,9 +170,12 @@ def _entries(info: dict) -> list[dict]:
 
 
 def _author(info: dict, platform: str | None) -> str:
+    # uploader у X и Instagram — отображаемое имя с пробелами и эмодзи, ник надёжнее
     if platform == X:
-        # У X uploader — отображаемое имя с пробелами и эмодзи, ник надёжнее
         return info.get("uploader_id") or info.get("uploader") or "unknown"
+    if platform == INSTAGRAM:
+        # у Instagram ник лежит в channel, а uploader_id — число
+        return info.get("channel") or info.get("uploader") or "unknown"
     return info.get("uploader") or info.get("uploader_id") or info.get("channel") or "unknown"
 
 

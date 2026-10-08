@@ -92,6 +92,16 @@ class ExplainTest(unittest.TestCase):
         for text, expected in cases.items():
             self.assertIn(expected, explain(Exception(text)), text)
 
+    def test_instagram_errors(self):
+        cases = {
+            "ERROR: [Instagram] X: This content is only available for registered users who follow this account": "Закрытый аккаунт",
+            "ERROR: [Instagram] X: The webpage request was redirected to the login page. You have exceeded the rate-limit": "временно ограничил",
+            "ERROR: [Instagram] X: Restricted Video: You must be 18 years old": "ограничением",
+            "ERROR: [Instagram] X: Instagram sent an empty media response. Check if this post": "без входа",
+        }
+        for text, expected in cases.items():
+            self.assertIn(expected, explain(Exception(text)), text)
+
     def test_unknown_is_short(self):
         e = Exception("ERROR: [TikTok] 123: Something odd happened\nTraceback ...")
         self.assertEqual(explain(e), "Something odd happened")
